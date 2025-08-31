@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-comp-graph"
+version = "0.1.0"
+requires-python = ">=3.13"
+description = "LLM computational graph tools and SEC 10-K downloader"
+readme = "README.md"
+authors = [{ name = "Ilya" }]
+license = { text = "MIT" }
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+download-10k = "llm_comp_graph.download.download_10K:main"

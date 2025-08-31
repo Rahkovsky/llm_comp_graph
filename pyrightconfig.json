@@ -1,0 +1,24 @@
+{
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "strict",
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "llama",
+    "llm_comp_graph/llama",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    "__pypackages__",
+    ".mypy_cache",
+    ".ruff_cache",
+    "data",
+    "out",
+    "logs",
+    "scripts",
+    "tests"
+  ],
+  "reportMissingTypeStubs": "none"
+}

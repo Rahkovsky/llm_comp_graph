@@ -1,0 +1,115 @@
+[project]
+name = "llm_comp_graph"
+version = "0.1.0"
+requires-python = ">=3.13"
+
+# -----------------------------
+# Ruff = formatter + linter
+# -----------------------------
+[tool.ruff]
+# Match your target interpreter so rules (e.g., pyupgrade) use 3.13 syntax.
+target-version = "py313"
+line-length = 120
+exclude = [
+  "data",
+  "out",
+  "logs",
+  "llm_comp_graph/llama",
+  "llama",
+  "__pycache__",
+  ".git",
+  ".hg",
+  ".mypy_cache",
+  ".pytype",
+  ".ruff_cache",
+  ".venv",
+  "venv",
+  ".env",
+  "build",
+  "dist",
+  "__pypackages__",
+]
+
+[tool.ruff.format]
+# Enable Ruff's Black-compatible formatter.
+# Use double quotes, normalize magic-trailing-commas, etc.
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint]
+# Keep it focused and fast. You can add/remove codes as you like.
+# E,F: pycodestyle/pyflakes basics
+# I: import sorting (replaces isort)
+# UP: pyupgrade (auto-modernize to 3.13)
+# B: flake8-bugbear (common gotchas)
+# N: pep8-naming
+# C4: flake8-comprehensions
+# SIM: flake8-simplify
+# PERF: perflint (low-risk perf wins)
+# PL: a subset of pylint rules implemented by Ruff
+# RUF: Ruff-specific rules (useful, low noise)
+select = ["E", "F", "I", "UP", "B", "N", "C4", "SIM", "PERF", "PL", "RUF"]
+
+# Example ignores:
+# - E501 (line length) is managed by the formatter; ignoring avoids duplicate noise.
+# - PLR (pylint "refactor" suggestions) can be chatty; keep what’s useful.
+ignore = ["E501"]
+
+# Let Ruff auto-fix safe things on `ruff check --fix` runs.
+fix = true
+unsafe-fixes = false
+
+[tool.ruff.lint.isort]
+# Customize import sections if needed; Ruff uses sensible defaults.
+# known-first-party = ["your_package"]
+# Combine as-is to reduce churn in diffs.
+combine-as-imports = true
+
+[tool.ruff.lint.per-file-ignores]
+# Allow unused imports in package __init__ files for namespace exports
+"**/__init__.py" = ["F401"]
+# Tests: relax a few noisy refactor hints and "magic value" rule
+"tests/**/*.py" = ["PLR2004", "PLR0913", "PLR0915"]
+
+# -----------------------------
+# Pyright = type checker
+# -----------------------------
+[tool.pyright]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+
+# Limit analysis to your src and tests (adjust as needed).
+include = ["src", "tests"]
+exclude = [
+  ".git",
+  ".venv",
+  "venv",
+  ".env",
+  "build",
+  "dist",
+  "__pypackages__",
+  ".mypy_cache",
+  ".ruff_cache",
+  "llm_comp_graph/llama",
+  "llama",
+]
+
+# If you keep stubs local, set this (optional)
+# stubPath = "typings"
+
+# Pragmatic tweaks to strict mode to reduce false-positive noise:
+reportMissingTypeStubs = "warning"
+reportPrivateUsage = "warning"
+reportUnusedCallResult = "warning"
+reportImplicitStringConcatenation = "warning"
+
+# If you sometimes use `typing.Any` intentionally:
+# reportAny = "warning"
+
+# Execution environments let you pin settings per folder (optional).
+# [[tool.pyright.executionEnvironments]]
+# root = "src"
+# pythonVersion = "3.13"
+# extraPaths = ["src"]

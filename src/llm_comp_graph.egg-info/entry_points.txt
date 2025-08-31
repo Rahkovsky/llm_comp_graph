@@ -1,0 +1,2 @@
+[console_scripts]
+download-10k = llm_comp_graph.download.download_10K:main

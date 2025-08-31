@@ -1,3 +1,12 @@
+Metadata-Version: 2.4
+Name: llm-comp-graph
+Version: 0.1.0
+Summary: LLM computational graph tools and SEC 10-K downloader
+Author: Ilya
+License: MIT
+Requires-Python: >=3.13
+Description-Content-Type: text/markdown
+
 # LLM Computational Graph
 
 This repository locally runs LLAMA models and provides tools for financial document analysis using SEC 10-K filings.
@@ -15,24 +24,17 @@ This repository locally runs LLAMA models and provides tools for financial docum
 ./setup_llama.sh linux_gpu     # Linux with NVIDIA GPU
 ```
 
-### Manual Setup (uv)
+### Manual Setup
 ```bash
 # 1. Install Python 3.13 and uv
-# 2. Create and activate a virtual environment
-uv venv --python 3.13
+# 2. Create virtual environment
+uv venv --python python3.13
 source .venv/bin/activate
 
-# 3. Install dependencies and the package in editable mode
+# 3. Install dependencies
 uv pip install -r requirements.txt
-uv pip install -e .
 
-# 4. Configure SEC User-Agent (required by SEC)
-cat > .env << 'EOF'
-SEC_USER_NAME="Your Name"
-SEC_USER_EMAIL="your.email@example.com"
-EOF
-
-# 5. Build llama.cpp (see LLAMA_SETUP.md for details)
+# 4. Build llama.cpp (see LLAMA_SETUP.md for details)
 ```
 
 ## Usage Examples
@@ -46,13 +48,13 @@ Download 10-K filings for specific companies:
 source .venv/bin/activate
 
 # Download 10-K for Apple (AAPL)
-python scripts/download/download_10K.py --tickers AAPL --year 2024 --verbose
+python scripts/download_10K.py --tickers AAPL --start-date 2020-01-01 --end-date 2024-12-31
 
 # Download 10-K for multiple companies
 
 
 # Download with text extraction (enabled by default)
-python scripts/download/download_10K.py --tickers MSFT --year 2024 --verbose
+python scripts/download_10K.py --tickers MSFT --start-date 2023-01-01 --end-date 2025-12-31
 ```
 
 ### Download 10-Q Filings
