@@ -309,7 +309,7 @@ def main():
     try:
         with open(args.test_results, "r", encoding="utf-8") as f:
             test_results = json.load(f)
-    except Exception as e:
+    except (OSError, json.JSONDecodeError) as e:
         raise SystemExit(f"Failed to load test results: {e}")
 
     print(f"Loaded {len(test_results)} test results from: {args.test_results}")

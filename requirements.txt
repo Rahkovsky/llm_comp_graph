@@ -1,11 +1,8 @@
 requests==2.32.5
 numpy==2.3.2
-#torch==2.8.0
-#transformers==4.55.2
-#accelerate==1.10.0
+torch==2.8.0
+transformers==4.55.2
 tqdm==4.67.1
-#beautifulsoup4=4.13.4
-#lxml==6.0.0
 psutil==7.0.0
 python-dotenv==1.1.1
 pre-commit==4.3.0
@@ -13,5 +10,9 @@ ruff==0.12.11
 pyright==1.1.404
 sec-edgar-downloader==5.0.3
 edgartools==4.9.0
-#python-dateutil>=2.8.0
-#html5lib>=1.1
+llama-index==0.13.5
+chromadb==1.0.20
+sentence-transformers==5.1.0
+llama-cpp-python==0.3.16
+llama-index-vector-stores-chroma==0.5.2
+llama-index-embeddings-huggingface==0.6.0

@@ -14,10 +14,7 @@ scripts/
 │   └── linux_gpu.sh           # Linux GPU setup
 ├── download/                   # SEC filing download scripts
 │   ├── __init__.py            # Package initialization
-│   ├── download_10K.py        # SEC 10-K document downloader (specific companies)
-│   ├── download_10Q.py        # SEC 10-Q document downloader
-│   ├── download_all_companies_10k.py  # Download 10-K from all public companies in a year
-│   └── download_2024.py       # Simple CLI for downloading all 2024 10-K data
+│   └── download_10K.py        # SEC 10-K document downloader (specific companies)
 ├── generate_questions.py       # Question generation script
 └── create_llama_index.py      # Create LlamaIndex for downloaded documents
 ```
@@ -77,37 +74,16 @@ All setup scripts depend on:
 ### Download data
 
 # Download 10-K for Apple (AAPL)
-python scripts/download/download_10K.py --ticker AAPL --years 2020-2024
+python scripts/download/download_10K.py --tickers AAPL --year 2024
 
 # Download 10-K for multiple companies
-python scripts/download/download_10K.py --ticker AAPL,MSFT,GOOGL --years 2022-2025 --output ./data
+python scripts/download/download_10K.py --tickers AAPL MSFT GOOGL --year 2024 --output-dir ./data/input/10K
 
-# Download with custom output directory
-python scripts/download/download_10K.py --ticker TSLA --years 2023 --output ./data
+# Download from a tickers file
+python scripts/download/download_10K.py --tickers-file tickers.txt --year 2024
 
 # Download 10-K filings from ALL public companies in a specific year
-python scripts/download/download_all_companies_10k.py --year 2024
-
-# Download with limits and resume capability
-python scripts/download/download_all_companies_10k.py --year 2024 --max-companies 100 --start-from AAPL
-
-# Skip companies that already have filings
-python scripts/download/download_all_companies_10k.py --year 2024 --skip-existing
-
-# 🚀 SIMPLE CLI for 2024 data (recommended)
-c
-
-# Test mode (100 companies)
-python scripts/download/download_2024.py --test
-
-# Resume from specific company
-python scripts/download/download_2024.py --resume AAPL
-
-# Skip existing files
-python scripts/download/download_2024.py --skip-existing
-
-# Custom progress file
-python scripts/download/download_2024.py --progress-file my_2024_progress.json
+python scripts/download/download_10K.py --all-companies --year 2024
 
 ### Create LlamaIndex
 
@@ -128,26 +104,24 @@ python scripts/create_llama_index.py --file-pattern "*.plain.txt"
 
 ### Search LLAMA Index
 
-# Show index statistics
-python scripts/search_llama_index.py --stats
+# Simple query (required: --query)
+python scripts/search_llama_index.py --index-dir data/llama_index --query "revenue recognition"
 
-# List all companies
-python scripts/search_llama_index.py --list-companies
+# Top-K and extractive summary
+python scripts/search_llama_index.py \
+  --index-dir data/llama_index \
+  --collection-name 10k_documents \
+  --query "AI will take over the world" \
+  --top-k 8 --max-chars 800 --summarize
 
-# Search by ticker
-python scripts/search_llama_index.py --ticker AAPL
+# Specify embedding backend/model
+python scripts/search_llama_index.py --index-dir data/llama_index --collection-name 10k_documents \
+  --embedding-backend local-sbert --embedding-model BAAI/bge-base-en-v1.5 \
+  --query "supply chain disruptions"
 
-# Search by date
-python scripts/search_llama_index.py --date 2024-10-28
-
-# Search by file size range
-python scripts/search_llama_index.py --size-range 5 10
-
-# Search by word count range
-python scripts/search_llama_index.py --word-range 10000 50000
-
-# Show detailed results
-python scripts/search_llama_index.py --ticker AAPL --details
+# Local LLAMA executive summary
+python scripts/search_llama_index.py --index-dir data/llama_index --collection-name 10k_documents \
+  --query "attention economy" --top-k 8 --max-chars 800 --llm-summary
 
 ### Generate Questions
 

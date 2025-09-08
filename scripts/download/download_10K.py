@@ -4,10 +4,10 @@
 import argparse
 import sys
 import time
-from typing import List
+from typing import List, Dict, Any
 import requests
 
-from llm_comp_graph.download.constants import DEFAULT_UA, FORM_TYPES
+from llm_comp_graph.download.constants import DEFAULT_UA, FORM_TYPES, OUTPUT_BASE
 from llm_comp_graph.download.core import download_and_extract_10k
 from llm_comp_graph.utils.logging_config import setup_logging, get_logger
 
@@ -23,13 +23,19 @@ def get_all_companies() -> List[str]:
             headers={"User-Agent": DEFAULT_UA},
         )
         response.raise_for_status()
-        companies = response.json()
+        companies_json: Dict[str, Any] = response.json()
+        if not isinstance(companies_json, dict):
+            logger.error("Unexpected tickers payload type from SEC")
+            return ["AAPL", "MSFT"]
 
-        tickers = [
-            data["ticker"].strip()
-            for data in companies.values()
-            if isinstance(data, dict) and data.get("ticker", "").strip()
-        ]
+        tickers: List[str] = []
+        for value in companies_json.values():
+            if isinstance(value, dict):
+                ticker_value = value.get("ticker")
+                if isinstance(ticker_value, str):
+                    t = ticker_value.strip()
+                    if t:
+                        tickers.append(t)
 
         logger.info(f"Found {len(tickers)} public companies")
         return tickers
@@ -40,7 +46,7 @@ def get_all_companies() -> List[str]:
         return ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX"]
 
 
-def main():
+def main() -> int:
     """Main function."""
     parser = argparse.ArgumentParser(description="Download 10-K filings")
     group = parser.add_mutually_exclusive_group(required=True)
@@ -60,9 +66,7 @@ def main():
     parser.add_argument(
         "--year", type=int, help="Specific year to download (e.g., 2024)"
     )
-    parser.add_argument(
-        "--output-dir", default="data/input/10K", help="Output directory"
-    )
+    parser.add_argument("--output-dir", default=OUTPUT_BASE, help="Output directory")
     parser.add_argument("--user-agent", default=DEFAULT_UA, help="User agent")
     parser.add_argument(
         "--sleep",
@@ -83,11 +87,13 @@ def main():
     )
     args = parser.parse_args()
 
-    # Setup logging system
-    setup_logging(verbose=args.verbose, module_name="sec_download")
+    setup_logging(
+        verbose=args.verbose, module_name="sec_download"
+    )  # Initialize logging
     logger = get_logger(__name__)
 
     # Get companies to process
+    companies: List[str] = []
     if args.all_companies:
         companies = get_all_companies()
     elif args.tickers:
@@ -121,8 +127,8 @@ def main():
             failed += 1
             logger.warning(f"Failed: {ticker}")
 
-        # Sleep between requests
-        if i < len(companies):  # Don't sleep after the last company
+        # Sleep between requests; skip after the last company
+        if i < len(companies):
             time.sleep(args.sleep)
 
     # Summary

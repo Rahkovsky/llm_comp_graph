@@ -3,6 +3,7 @@
 
 from llm_comp_graph.utils.env_config import get_sec_user_agent
 import os
+from pathlib import Path
 
 
 # SEC API URLs
@@ -34,6 +35,23 @@ DEFAULT_SLEEP = 0.25
 LLAMA_CLI_REL = "llama/build_metal/bin/llama-cli"  # macOS Metal default
 LLAMA_MODEL_REL = "models/Meta-Llama-3.1-8B-Instruct-Q6_K.gguf"
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def _find_project_root() -> str:
+    """Locate project root by walking up until a marker file is found.
+
+    Falls back to the repository root (three levels up from this file) if markers are not found.
+    """
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "pyproject.toml").exists() or (parent / "README.md").exists():
+            return str(parent)
+    # Fallback: repo root is typically three levels up: src/llm_comp_graph/constants.py → repo
+    try:
+        return str(here.parents[2])
+    except Exception:
+        return str(here.parent)
+
+
+PROJECT_ROOT = _find_project_root()
 LLAMA_CLI = os.path.join(PROJECT_ROOT, LLAMA_CLI_REL)
 LLAMA_MODEL = os.path.join(PROJECT_ROOT, LLAMA_MODEL_REL)

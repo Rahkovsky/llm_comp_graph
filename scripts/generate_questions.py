@@ -5,19 +5,20 @@ import os
 import re
 import subprocess
 import time
+from typing import List, Tuple, Dict, cast
 import psutil
-from typing import List
+from llm_comp_graph.constants import OUTDIR_10K
 
 # Import constants
-from constants import LLAMA_CLI, LLAMA_MODEL
+from constants import LLAMA_CLI, LLAMA_MODEL  # type: ignore[reportMissingImports]
 
 
 def check_bins():
-    if not os.path.isfile(LLAMA_CLI):
+    if not os.path.isfile(cast(str, LLAMA_CLI)):
         raise SystemExit(
             f"llama-cli not found at {LLAMA_CLI}. Check constants.py for correct path."
         )
-    if not os.path.isfile(LLAMA_MODEL):
+    if not os.path.isfile(cast(str, LLAMA_MODEL)):
         raise SystemExit(
             f"Model not found at {LLAMA_MODEL}. Check constants.py for correct path."
         )
@@ -30,7 +31,9 @@ def chat_prompt(system: str, user: str) -> str:
     return "system\n" + system + "\nuser\n" + user + "\nassistant\n"
 
 
-def generate_qa_on_chunk(chunk_text: str, num_questions: int = 2) -> list:
+def generate_qa_on_chunk(
+    chunk_text: str, num_questions: int = 2
+) -> List[Tuple[str, str]]:
     """Generate question-answer pairs from a text chunk."""
     system = f"""You are a financial analyst creating Q&A pairs from SEC filings.
 Generate {num_questions} clear, factual question-answer pairs based on the provided text.
@@ -66,7 +69,7 @@ IMPORTANT: Generate {num_questions} Q&A pairs."""
     print(f"      [DEBUG] Raw response: {response[:200]}...")
 
     # Parse Q&A pairs from response
-    qa_pairs = []
+    qa_pairs: List[Tuple[str, str]] = []
     lines = response.strip().split("\n")
     current_q = None
 
@@ -97,11 +100,11 @@ IMPORTANT: Generate {num_questions} Q&A pairs."""
         return qa_pairs
     else:
         print("      [DEBUG] No valid pairs found, returning empty")
-        return []  # Return empty if no valid pairs
+        return []
 
 
 def run_llama(prompt: str, n: int = 256, temp: float = 0.2, ctx: int = 2048) -> str:
-    cmd = [
+    cmd: List[str] = [
         LLAMA_CLI,
         "-m",
         LLAMA_MODEL,
@@ -139,7 +142,7 @@ def chunk(text: str, max_chars: int = 4000, overlap: int = 400) -> List[str]:
     if len(text) <= max_chars:
         return [text]
 
-    blocks = []
+    blocks: List[str] = []
     i = 0
     chunk_count = 0
     max_chunks = 50  # Limit total chunks to prevent memory issues
@@ -147,7 +150,7 @@ def chunk(text: str, max_chars: int = 4000, overlap: int = 400) -> List[str]:
     while i < len(text) and chunk_count < max_chunks:
         j = min(len(text), i + max_chars)
 
-        # Try to find a good break point (sentence or paragraph end)
+        # Try to find a good break point (sentence/paragraph end)
         if j < len(text):
             # Look for sentence endings within the last 200 chars
             for k in range(j, max(i + max_chars - 200, i), -1):
@@ -196,7 +199,7 @@ def validate_text_quality(text: str) -> bool:
     return True
 
 
-def analyze_content_richness(text: str) -> dict:
+def analyze_content_richness(text: str) -> Dict[str, float | int | bool | str]:
     """Analyze text content to determine if it's rich enough for question generation."""
     if not text or len(text) < 100:
         return {"rich_enough": False, "reason": "Text too short", "score": 0.0}
@@ -255,12 +258,12 @@ def analyze_content_richness(text: str) -> dict:
     reason = f"Score: {score:.2f} (sentences: {sentence_count}, keywords: {keyword_matches}, words: {word_count})"
 
     return {
-        "rich_enough": rich_enough,
+        "rich_enough": bool(rich_enough),
         "reason": reason,
-        "score": score,
-        "sentence_count": sentence_count,
-        "keyword_count": keyword_matches,
-        "word_count": word_count,
+        "score": float(score),
+        "sentence_count": int(sentence_count),
+        "keyword_count": int(keyword_matches),
+        "word_count": int(word_count),
     }
 
 
@@ -275,9 +278,9 @@ def determine_optimal_question_count(text: str, max_questions: int = 5) -> int:
     base_count = max(1, int(analysis["score"] * max_questions))
 
     # Adjust based on content length and keyword density
-    if analysis["sentence_count"] >= 15 and analysis["keyword_count"] >= 8:
+    if int(analysis["sentence_count"]) >= 15 and int(analysis["keyword_count"]) >= 8:
         question_count = min(base_count + 1, max_questions)
-    elif analysis["sentence_count"] >= 10 and analysis["keyword_count"] >= 5:
+    elif int(analysis["sentence_count"]) >= 10 and int(analysis["keyword_count"]) >= 5:
         question_count = base_count
     else:
         question_count = max(1, base_count - 1)
@@ -298,7 +301,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--glob",
-        default="data/input/10K/*/*/*.plain.txt",
+        default=f"{OUTDIR_10K}/*/*/*.plain.txt",
         help="Glob for plain text 10-K files",
     )
     ap.add_argument("--out", default="out/qa_10k.txt", help="Where to save Q&A pairs")
@@ -332,7 +335,7 @@ def main():
     process = psutil.Process()
     print(f"[START] Initial memory: {process.memory_info().rss / 1024 / 1024:.1f} MB")
 
-    all_qa_pairs: List[tuple] = []
+    all_qa_pairs: List[Tuple[str, str]] = []
 
     for i, fp in enumerate(files):
         print(f"Processing file {i + 1}/{len(files)}: {os.path.basename(fp)}")
@@ -359,8 +362,6 @@ def main():
                 continue
 
             # Clean corrupted characters from the text
-            import re
-
             # Replace non-breaking spaces and other problematic characters
             txt = re.sub(r"\xc2\xa0", " ", txt)  # Non-breaking space
             txt = re.sub(
@@ -426,9 +427,9 @@ def main():
             memory_mb = process.memory_info().rss / 1024 / 1024
             print(f"  [MEMORY] After cleanup: {memory_mb:.1f} MB")
 
-    # final dedup
-    seen = set()
-    final_qa = []
+    # Final dedup
+    seen: set[str] = set()
+    final_qa: List[Tuple[str, str]] = []
     for q, a in all_qa_pairs:
         k = re.sub(r"[^\w]+", " ", q.lower()).strip()
         if k and k not in seen:

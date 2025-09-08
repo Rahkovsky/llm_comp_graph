@@ -55,21 +55,43 @@ python scripts/download/download_10K.py --tickers AAPL --year 2024 --verbose
 python scripts/download/download_10K.py --tickers MSFT --year 2024 --verbose
 ```
 
-### Download 10-Q Filings
-
-```bash
-# Download quarterly reports
-python scripts/download_10Q.py --tickers AAPL --start-date 2024-01-01 --end-date 2024-12-31
-
-# Download multiple quarters with text extraction
-python scripts/download_10Q.py --tickers AAPL MSFT --start-date 2024-01-01 --extract-text
-```
-
 ### Generate Questions from Documents
 
 ```bash
 # Generate questions from downloaded filings
 python scripts/generate_questions.py --input ./sec_data --output ./questions
+```
+
+### Build a LlamaIndex (Chroma) and Search It
+
+```bash
+# Activate virtual environment
+source .venv/bin/activate
+
+# 1) Build the index (defaults to data/input/10K, uses local HuggingFace embeddings)
+python scripts/create_llama_index.py \
+  --input-dir data/input/10K \
+  --output-dir llama_index \
+  --embedding-model BAAI/bge-base-en-v1.5
+
+# Options:
+#   --metadata-only            # create only metadata_index.json (no vector index)
+#   --max-files 500            # index a subset for quick tests
+#   --rebuild                  # wipe existing chroma_db and index dirs first
+#   --collection-name NAME     # change Chroma collection name (default: 10k_documents)
+#   --resolve-company-names    # enrich metadata with company_name via SEC (slower)
+
+# 2) Query the index and optionally summarize results (all local)
+python scripts/search_llama_index.py \
+  --index-dir llama_index \
+  --query "revenue recognition policy" \
+  --top-k 8 \
+  --summarize --summary-sentences 7
+
+# Embedding model options:
+#   --embedding-model BAAI/bge-base-en-v1.5   # default; use same at query time
+#                         intfloat/e5-large-v2
+#                         BAAI/bge-m3         # 1024 ctx; chunking auto-caps to model max
 ```
 
 ## Project Structure
@@ -80,9 +102,11 @@ llm_comp_graph/
 ├── llama_env.sh                # Environment configuration
 ├── scripts/
 │   ├── setup/                  # Platform-specific setup scripts
-│   ├── download_10K.py         # SEC 10-K downloader
-│   ├── download_10Q.py         # SEC 10-Q downloader
-│   └── generate_questions.py   # Question generation
+│   ├── download/               # Download scripts
+│   │   └── download_10K.py     # SEC 10-K downloader
+│   ├── generate_questions.py   # Question generation
+│   ├── create_llama_index.py   # Build vector index
+│   └── search_llama_index.py   # Query the index
 ├── llama/                      # Local llama.cpp installation
 ├── models/                     # Downloaded models
 └── .venv/                      # Python virtual environment
@@ -91,7 +115,7 @@ llm_comp_graph/
 ## Development Plan
 
 - [x] **Local LLAMA Setup** - Complete
-- [x] **10-K/10-Q Downloaders** - Available
+- [x] **10-K Downloader** - Available
 - [ ] **Vector Database Creation** - In Progress
 - [ ] **RAG System for Business Questions** - Planned
 - [ ] **LLM Fine-tuning on 10-K Data** - Planned

@@ -12,8 +12,7 @@ Professional, modular, and efficient SEC filing download system.
 
 ### **Download Scripts**
 - **`download_10K.py`**: Download specific company 10-K filings
-- **`download_2024.py`**: Download all 2024 10-K filings (simplified CLI)
-- **`download_10Q.py`**: Download 10-Q filings
+
 
 ## 🚀 **Quick Start**
 
@@ -30,17 +29,7 @@ echo -e "AAPL\\nMSFT\\nGOOGL" > tickers.txt
 python scripts/download/download_10K.py --tickers-file tickers.txt
 ```
 
-### **Bulk 2024 Download**
-```bash
-# Test mode (100 companies)
-python scripts/download/download_2024.py --test
 
-# Full download (all companies)
-python scripts/download/download_2024.py
-
-# Custom output directory
-python scripts/download/download_2024.py --output-dir custom/path --max-companies 500
-```
 
 ## 📋 **Command Reference**
 
@@ -56,13 +45,7 @@ python scripts/download/download_2024.py --output-dir custom/path --max-companie
 --max-per-ticker N            Max filings per ticker
 ```
 
-### **download_2024.py**
-```
---output-dir DIR              Output directory
---sleep SECONDS               Delay between requests
---max-companies N             Max companies to process
---test                        Test mode (100 companies)
-```
+
 
 ## 🎯 **Features**
 

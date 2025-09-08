@@ -91,7 +91,7 @@ class SECExtractor:
             filing, form_type = self._get_filing(
                 ticker, forms, year, start_date, end_date
             )
-        except Exception as e:
+        except Exception as e:  # edgartools/network errors
             self.logger.error(f"Failed to fetch filing data for {ticker}: {e}")
             return 0
 
@@ -125,7 +125,7 @@ class SECExtractor:
                 self.logger.error(f"Filing.text() returned non-string for {ticker}")
                 return 0
             text = self._normalize_text(raw_text)
-        except Exception as e:
+        except Exception as e:  # external I/O/parsing errors
             self.logger.error(f"Failed to extract text for {ticker}: {e}")
             return 0
 
