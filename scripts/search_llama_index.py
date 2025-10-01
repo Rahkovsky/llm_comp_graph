@@ -37,25 +37,28 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.vector_stores.chroma import ChromaVectorStore
 import chromadb
-from llm_comp_graph.constants import LLAMA_MODEL  # local llama.cpp model path
+from llm_comp_graph.constants import (
+    LLAMA_MODEL,
+    INDEX_DIR as DEFAULT_INDEX_DIR,
+    DEFAULT_EMBED_MODEL,
+    DEFAULT_COLLECTION_NAME,
+    DEFAULT_LLM_CTX,
+)
 from llama_cpp import Llama  # local llama.cpp Python API
 
-# Silence tokenizers parallelism warning when process forks
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-
-# Silence LlamaIndex info logs (e.g., MockLLM notice)
-logging.getLogger("llama_index").setLevel(logging.WARNING)
+os.environ.setdefault(
+    "TOKENIZERS_PARALLELISM", "false"
+)  # Silence tokenizers parallelism warning, real parallelization is handled by Rust
+logging.getLogger("llama_index").setLevel(
+    logging.WARNING
+)  # Silence LlamaIndex info logs (e.g., MockLLM notice)
 logging.getLogger("llama_index.core").setLevel(logging.WARNING)
 
 
 def build_embed_model(backend: str, model_name: Optional[str]) -> Any:
-    """Create an embedding model consistent with the index's embedding configuration.
-
-    Note: For llama.cpp GGUF embeddings, many models lack an embedding head.
-    This utility defaults to a local sentence-transformers backend.
-    """
+    """Create an embedding model consistent with the index's embedding configuration."""
     if backend == "local-sbert":
-        name = model_name or "sentence-transformers/all-MiniLM-L6-v2"
+        name = model_name or DEFAULT_EMBED_MODEL
         return HuggingFaceEmbedding(model_name=name, cache_folder="models/embeddings")
     if backend == "none":
         return None
@@ -72,6 +75,15 @@ def _get_llama(
     n_threads: Optional[int] = None,
     n_batch: int = 512,
 ) -> Llama:
+    """Create or reuse a cached llama.cpp model instance.
+
+    - n_ctx: Max context tokens for prompt + generation.
+    - n_gpu_layers: Layers to offload to GPU (-1 = auto, as many as fit).
+    - n_threads: CPU threads for CPU-resident ops; None auto-detects.
+    - n_batch: Prompt processing batch size (tokens per step).
+
+    Returns the cached Llama instance configured for LLAMA_MODEL.
+    """
     global _llama, _llama_cfg
     if n_threads is None:
         try:
@@ -97,22 +109,128 @@ def _get_llama(
     return _llama
 
 
+def _rewrite_query_with_llama(
+    original_query: str,
+    *,
+    n_queries: int = 3,
+    n_ctx: int = DEFAULT_LLM_CTX,
+    max_tokens: int = 200,
+    temperature: float = 0.3,
+    n_gpu_layers: int = -1,
+) -> List[str]:
+    """Use local LLM to rewrite/expand user query into multiple optimized queries.
+
+    This improves recall by generating queries that are more likely to match
+    the specific language and terminology used in 10-K financial documents.
+    """
+    prompt = f"""You are a financial analyst expert. Rewrite the user's query into {n_queries} different, specific queries that would be effective for searching SEC 10-K filings. Each query should use precise financial terminology and be optimized for finding relevant information.
+
+Original query: "{original_query}"
+
+Generate {n_queries} rewritten queries, one per line. Each query should:
+- Use specific financial/legal terminology from 10-K filings
+- Focus on different aspects of the original question
+- Be concise but comprehensive
+- Avoid vague terms like "key" or "important"
+
+Rewritten queries:"""
+
+    llama = _get_llama(n_ctx=n_ctx, n_gpu_layers=n_gpu_layers)
+    try:
+        result = llama.create_completion(
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            repeat_penalty=1.1,
+        )
+        choices = result.get("choices", [])
+        if choices:
+            raw_text = str(choices[0].get("text", "")).strip()
+            # Parse the generated queries
+            queries = [q.strip() for q in raw_text.split("\n") if q.strip()]
+            # Filter out empty or too-short queries
+            queries = [
+                q
+                for q in queries
+                if len(q) > 10 and not q.startswith(("Query", "1.", "2.", "3."))
+            ]
+            # Limit to requested number and add original if needed
+            queries = queries[:n_queries]
+            if len(queries) < n_queries:
+                queries.append(original_query)  # Fallback to original
+            return queries
+    except Exception as e:
+        print(f"[Query rewriting failed: {e}, using original query]")
+
+    return [original_query]
+
+
+def _fuse_query_results(
+    all_nodes: List[Any], *, top_k: int, fusion_method: str = "rrf"
+) -> List[Any]:
+    """Fuse results from multiple queries using Reciprocal Rank Fusion (RRF).
+
+    RRF combines rankings from multiple queries by scoring each document
+    based on its rank across all queries. Higher scores = better overall relevance.
+    """
+    if not all_nodes:
+        return []
+
+    # Group nodes by their text content (deduplication)
+    seen_texts = set()
+    unique_nodes = []
+    for node in all_nodes:
+        text = getattr(node, "text", "")
+        if text not in seen_texts:
+            seen_texts.add(text)
+            unique_nodes.append(node)
+
+    if len(unique_nodes) <= top_k:
+        return unique_nodes
+
+    # Simple RRF scoring: each node gets 1/(rank + 60) points per query
+    # We'll use a simplified approach since we don't have explicit ranks
+    node_scores = {}
+    for i, node in enumerate(unique_nodes):
+        text = getattr(node, "text", "")
+        # Simple scoring: earlier appearance = higher score
+        score = 1.0 / (i + 60)  # RRF constant of 60
+        if text in node_scores:
+            node_scores[text] += score
+        else:
+            node_scores[text] = score
+
+    # Sort by combined score and return top_k
+    scored_nodes: List[Tuple[float, Any]] = [
+        (node_scores.get(getattr(node, "text", ""), 0), node) for node in unique_nodes
+    ]
+    scored_nodes.sort(key=lambda x: x[0], reverse=True)
+
+    return [node for _, node in scored_nodes[:top_k]]
+
+
 def _llm_summarize_with_llama(
     excerpts: List[str],
     *,
     companies: Optional[List[str]] = None,
     question: Optional[str] = None,
     system_prompt: Optional[str] = None,
-    n_ctx: int = 16384,
+    n_ctx: int = DEFAULT_LLM_CTX,
     max_tokens: int = 512,
     temperature: float = 0.2,
     n_gpu_layers: int = -1,
 ) -> str:
-    # Cap input to fit in context (rough estimate: 4 chars/token). Reserve ~256 tokens for system/user wrappers.
+    # Preflight: estimate token usage and enforce only n_ctx to avoid OOM.
+    # Approx: 1 token ≈ 4 chars; reserve ~256 tokens for wrappers.
     reserved = max_tokens + 256
-    max_input_tokens = max(512, n_ctx - reserved)
-    max_input_chars = max_input_tokens * 4
-    joined = "\n\n".join(excerpts)[:max_input_chars]
+    est_tokens = sum(max(1, len(x) // 4) for x in excerpts)
+    max_allowed = max(512, n_ctx - reserved)
+    if est_tokens > max_allowed:
+        raise ValueError(
+            f"LLM input too large: est_tokens={est_tokens} > allowed={max_allowed} (n_ctx={n_ctx}, reserved={reserved}). "
+            "Reduce --top-k, increase n_ctx, or lower chunk size during indexing."
+        )
+    joined = "\n\n".join(excerpts)
     company_hint = (
         "\nCompanies covered: " + ", ".join(sorted(set(companies or [])))
         if companies
@@ -124,7 +242,7 @@ def _llm_summarize_with_llama(
     )
     task_txt = (
         "Write an executive summary (6-10 sentences) that synthesizes cross-company risks and themes; "
-        "avoid focusing on a single company; avoid repetition; generalize beyond any one brand."
+        "avoid focusing on a single company; avoid repetition; generalize beyond any one brand; try to be detailed and specific, avoid generalities;"
     )
     if question:
         task_txt = f"Question: {question}\n" + task_txt
@@ -133,7 +251,7 @@ def _llm_summarize_with_llama(
         + sys_txt
         + "\n"
         + "user\nExcerpts:\n"
-        + joined[:12000]
+        + joined
         + company_hint
         + "\n\nTask: "
         + task_txt
@@ -231,10 +349,14 @@ def main():
     )
 
     parser.add_argument(
-        "--index-dir", default="llama_index", help="Directory where index was persisted"
+        "--index-dir",
+        default=DEFAULT_INDEX_DIR,
+        help="Directory where index was persisted",
     )
     parser.add_argument(
-        "--collection-name", default="10k_documents", help="Chroma collection name"
+        "--collection-name",
+        default=DEFAULT_COLLECTION_NAME,
+        help="Chroma collection name",
     )
     parser.add_argument("--query", required=True, help="Search query text")
     parser.add_argument(
@@ -255,6 +377,12 @@ def main():
         "--llm-summary",
         action="store_true",
         help="Use local llama.cpp to generate an executive summary",
+    )
+    parser.add_argument(
+        "--llm-n-ctx",
+        type=int,
+        default=DEFAULT_LLM_CTX,
+        help="Context window for local llama.cpp (tokens)",
     )
     parser.add_argument(
         "--summary-sentences",
@@ -279,8 +407,26 @@ def main():
     )
     parser.add_argument(
         "--embedding-model",
-        default="BAAI/bge-base-en-v1.5",
+        default=DEFAULT_EMBED_MODEL,
         help="Embedding model name/path for local-sbert backend",
+    )
+    parser.add_argument(
+        "--rewrite-queries",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use local LLM to rewrite/expand queries for better recall",
+    )
+    parser.add_argument(
+        "--n-rewritten-queries",
+        type=int,
+        default=3,
+        help="Number of rewritten queries to generate (default: 3)",
+    )
+    parser.add_argument(
+        "--query-rewrite-temp",
+        type=float,
+        default=0.3,
+        help="Temperature for query rewriting (default: 0.3)",
     )
     # llama.cpp embedding backend removed in this build
 
@@ -289,9 +435,35 @@ def main():
     embed_model = build_embed_model(args.embedding_backend, args.embedding_model)
     index = load_index(args.index_dir, args.collection_name, embed_model)
 
-    print("🔎 Running query...")
-    retriever = index.as_retriever(similarity_top_k=args.top_k)
-    nodes = retriever.retrieve(args.query)
+    # Query rewriting for improved recall
+    if args.rewrite_queries:
+        print("🔄 Rewriting queries for better recall...")
+        rewritten_queries = _rewrite_query_with_llama(
+            args.query,
+            n_queries=args.n_rewritten_queries,
+            n_ctx=args.llm_n_ctx,
+            temperature=args.query_rewrite_temp,
+        )
+        print(f"📝 Generated {len(rewritten_queries)} queries:")
+        for i, q in enumerate(rewritten_queries, 1):
+            print(f"  {i}. {q}")
+
+        # Retrieve results for each rewritten query
+        retriever = index.as_retriever(
+            similarity_top_k=args.top_k * 2
+        )  # Get more per query
+        all_nodes = []
+        for query in rewritten_queries:
+            query_nodes = retriever.retrieve(query)
+            all_nodes.extend(query_nodes)
+
+        # Fuse results using RRF
+        nodes = _fuse_query_results(all_nodes, top_k=args.top_k)
+        print(f"🔗 Fused {len(all_nodes)} results into {len(nodes)} unique documents")
+    else:
+        print("🔎 Running query...")
+        retriever = index.as_retriever(similarity_top_k=args.top_k)
+        nodes = retriever.retrieve(args.query)
 
     print("\n📚 Top results:")  # Display sources
     texts_for_summary: List[str] = []
@@ -320,7 +492,7 @@ def main():
             companies=companies_hint,
             question=args.question,
             system_prompt=args.system_prompt,
-            n_ctx=16384,
+            n_ctx=args.llm_n_ctx,
             max_tokens=512,
             temperature=0.2,
             n_gpu_layers=-1,

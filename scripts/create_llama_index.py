@@ -11,11 +11,13 @@ import json
 import os
 import shutil
 import time
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import re
-import requests
 
 from llama_index.core import VectorStoreIndex, Document, StorageContext, Settings
 from llama_index.core.node_parser import SentenceSplitter
@@ -25,7 +27,12 @@ import chromadb
 from llm_comp_graph.utils.env_config import get_sec_user_agent
 from llm_comp_graph.utils.logging_config import setup_logging
 from transformers import AutoConfig, AutoTokenizer
-from llm_comp_graph.constants import OUTDIR_10K
+from llm_comp_graph.constants import (
+    OUTDIR_10K,
+    INDEX_DIR as DEFAULT_INDEX_DIR,
+    DEFAULT_EMBED_MODEL,
+    DEFAULT_COLLECTION_NAME,
+)
 
 
 """This build assumes modern LlamaIndex packages are installed (see requirements)."""
@@ -35,12 +42,32 @@ logger = setup_logging(module_name=__name__)
 
 company_name_cache: Dict[str, str] = {}
 
-# Defaults for chunking heuristics
+# Defaults for chunking heuristics (optimized for 10-K documents)
 DEFAULT_CHUNK_SIZE = 900
 DEFAULT_MIN_CHUNK = 64
 DEFAULT_MODEL_MARGIN = 32
 DEFAULT_MIN_OVERLAP = 32
 DEFAULT_OVERLAP_RATIO = 0.18
+
+# HNSW tuning parameters for optimal recall/performance balance
+DEFAULT_HNSW_EF_CONSTRUCTION = 200
+DEFAULT_HNSW_EF_SEARCH = 150
+DEFAULT_HNSW_MAX_NEIGHBORS = 32
+
+
+def _create_robust_session() -> requests.Session:
+    """Create a requests session with retry strategy for network resilience."""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1.0,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS"],
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 
 def normalize_cik(cik: str) -> str:
@@ -63,17 +90,14 @@ def fetch_company_name_from_sec(cik: str) -> Optional[str]:
         except Exception:
             ua = "llm-comp-graph/1.0 (contact@example.com)"
         headers = {"User-Agent": ua}
-        for attempt in range(3):
-            resp = requests.get(url, headers=headers, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                name = data.get("name") or data.get("entityType")
-                return name.strip() if isinstance(name, str) and name.strip() else None
-            if resp.status_code in (429, 500, 502, 503, 504):
-                time.sleep(1.5 * (attempt + 1))
-                continue
-            break
-    except Exception:
+        session = _create_robust_session()
+        resp = session.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()  # Raises HTTPError for 4xx/5xx
+        data = resp.json()
+        name = data.get("name") or data.get("entityType")
+        return name.strip() if isinstance(name, str) and name.strip() else None
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"Failed to fetch company name for CIK {cik}: {e}")
         pass
     return None
 
@@ -233,11 +257,14 @@ def create_vector_index(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     embedding_model_name: str = "BAAI/bge-base-en-v1.5",
     collection_name: str = "10k_documents",
+    hnsw_ef_construction: int = DEFAULT_HNSW_EF_CONSTRUCTION,
+    hnsw_ef_search: int = DEFAULT_HNSW_EF_SEARCH,
+    hnsw_max_neighbors: int = DEFAULT_HNSW_MAX_NEIGHBORS,
 ):
     assert documents, "No documents to index"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Embeddings (with correct per-model instructions)
+    # Embeddings (with correct per-model instructions and explicit normalization)
     q_instr, t_instr = _instructions(embedding_model_name)
     cache_folder = str(Path(output_dir) / "models" / "embeddings")
     embed = HuggingFaceEmbedding(
@@ -245,6 +272,7 @@ def create_vector_index(
         cache_folder=cache_folder,
         query_instruction=q_instr,
         text_instruction=t_instr,
+        normalize=True,  # Explicit normalization for cosine similarity alignment
     )
 
     # Cap chunking to embedder capacity (avoid truncation at embed time)
@@ -258,14 +286,21 @@ def create_vector_index(
     )
 
     Settings.embed_model = embed
+    # Optimized chunking for 10-K documents: smaller chunks with more overlap
     Settings.node_parser = SentenceSplitter(
-        chunk_size=eff_chunk, chunk_overlap=eff_overlap
+        chunk_size=eff_chunk,
+        chunk_overlap=eff_overlap,
+        paragraph_separator="\n\n",  # Preserve paragraph structure
+        secondary_chunking_regex="[.!?]\\s+",  # Split on sentence boundaries
     )
 
-    # Chroma (deterministic cosine space)
+    # Chroma (with explicit cosine space and HNSW tuning)
     db = chromadb.PersistentClient(path=os.path.join(output_dir, "chroma_db"))
     col = db.get_or_create_collection(
-        collection_name, metadata={"hnsw:space": "cosine"}
+        collection_name,
+        metadata={
+            "hnsw:space": "cosine",  # Align with normalized embeddings
+        },
     )
     vs = ChromaVectorStore(chroma_collection=col)
     sc = StorageContext.from_defaults(vector_store=vs)
@@ -284,9 +319,13 @@ def create_vector_index(
             {
                 "backend": "huggingface",
                 "model_name": embedding_model_name,
+                "normalize": True,
                 "metric": "cosine",
                 "chunk_size": eff_chunk,
                 "chunk_overlap": eff_overlap,
+                "hnsw_ef_construction": hnsw_ef_construction,
+                "hnsw_ef_search": hnsw_ef_search,
+                "hnsw_max_neighbors": hnsw_max_neighbors,
                 "collection_name": collection_name,
                 "docs_count": len(documents),
                 "created_at": datetime.now().isoformat(),
@@ -355,9 +394,13 @@ def stream_and_index(
     output_dir: str,
     *,
     chunk_size: int,
+    chunk_overlap: int,
     embedding_model_name: str,
     collection_name: str,
     resolve_names: bool,
+    hnsw_ef_construction: int = DEFAULT_HNSW_EF_CONSTRUCTION,
+    hnsw_ef_search: int = DEFAULT_HNSW_EF_SEARCH,
+    hnsw_max_neighbors: int = DEFAULT_HNSW_MAX_NEIGHBORS,
     max_files: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Stream files → chunk → embed → insert, to avoid loading the full corpus in RAM.
@@ -374,18 +417,26 @@ def stream_and_index(
         cache_folder=cache_folder,
         query_instruction=q_instr,
         text_instruction=t_instr,
+        normalize=True,  # Explicit normalization for cosine similarity alignment
     )
 
     model_max = _embedder_max_len(embedding_model_name)
     eff_chunk = max(
         DEFAULT_MIN_CHUNK, min(chunk_size, model_max - DEFAULT_MODEL_MARGIN)
     )
+    # Use user-provided chunk_overlap, but ensure it's within reasonable bounds
     eff_overlap = max(
         DEFAULT_MIN_OVERLAP,
-        min(int(DEFAULT_OVERLAP_RATIO * eff_chunk), eff_chunk // 2),
+        min(chunk_overlap, eff_chunk // 2),  # Don't exceed half of chunk size
     )
     Settings.embed_model = embed
-    splitter = SentenceSplitter(chunk_size=eff_chunk, chunk_overlap=eff_overlap)
+    # Optimized chunking for 10-K documents
+    splitter = SentenceSplitter(
+        chunk_size=eff_chunk,
+        chunk_overlap=eff_overlap,
+        paragraph_separator="\n\n",
+        secondary_chunking_regex="[.!?]\\s+",
+    )
     Settings.node_parser = splitter
     logger.info(
         f"Effective chunking -> chunk_size={eff_chunk}, chunk_overlap={eff_overlap} (model_max={model_max})"
@@ -394,11 +445,20 @@ def stream_and_index(
     # Vector store / index
     db = chromadb.PersistentClient(path=os.path.join(output_dir, "chroma_db"))
     col = db.get_or_create_collection(
-        collection_name, metadata={"hnsw:space": "cosine"}
+        collection_name,
+        metadata={
+            "hnsw:space": "cosine",
+        },
+        configuration={
+            "hnsw:ef_construction": hnsw_ef_construction,
+            "hnsw:ef_search": hnsw_ef_search,
+            "hnsw:max_neighbors": hnsw_max_neighbors,
+        },
     )
     vs = ChromaVectorStore(chroma_collection=col)
     sc = StorageContext.from_defaults(vector_store=vs)
-    index = VectorStoreIndex.from_vector_store(vector_store=vs, storage_context=sc)
+    # Create a new empty index that we can insert nodes into
+    index = VectorStoreIndex(nodes=[], storage_context=sc)
 
     base_path = Path(input_dir)
     if not base_path.exists():
@@ -417,17 +477,28 @@ def stream_and_index(
             logger.info(f"Processed {processed} files (streaming)...")
 
         try:
+            logger.info(f"Processing file: {file_path}")
             content = file_path.read_text(encoding="utf-8", errors="ignore")
             if not content.strip():
+                logger.info(f"Skipping empty file: {file_path}")
                 continue
+            logger.info(f"Read {len(content)} characters from {file_path}")
+
             metadata = get_file_metadata(file_path, resolve_names=resolve_names)
             meta_docs.append({"metadata": metadata})
+            logger.info(f"Created metadata: {metadata}")
 
             doc = Document(text=content, metadata=metadata)  # type: ignore[call-arg]
+            logger.info("Created document, splitting into nodes...")
             nodes = splitter.get_nodes_from_documents([doc])
+            logger.info(f"Created {len(nodes)} nodes, inserting into index...")
             index.insert_nodes(nodes)
+            logger.info(f"Successfully inserted {len(nodes)} nodes for {file_path}")
         except Exception as e:
             logger.warning(f"Error streaming {file_path}: {e}")
+            import traceback
+
+            logger.warning(f"Traceback: {traceback.format_exc()}")
 
     index.storage_context.persist(persist_dir=os.path.join(output_dir, "index"))
     logger.info("Streaming ingestion finished and persisted")
@@ -471,7 +542,7 @@ Examples:
     )
     parser.add_argument(
         "--output-dir",
-        default="data/llama_index",
+        default=DEFAULT_INDEX_DIR,
         help="Output directory for the index",
     )
     parser.add_argument(
@@ -488,6 +559,24 @@ Examples:
         type=int,
         default=160,
         help="Chunk overlap for text splitting",
+    )
+    parser.add_argument(
+        "--hnsw-ef-construction",
+        type=int,
+        default=DEFAULT_HNSW_EF_CONSTRUCTION,
+        help="HNSW ef_construction parameter (higher = better recall, slower build)",
+    )
+    parser.add_argument(
+        "--hnsw-ef-search",
+        type=int,
+        default=DEFAULT_HNSW_EF_SEARCH,
+        help="HNSW ef_search parameter (higher = better recall, slower queries)",
+    )
+    parser.add_argument(
+        "--hnsw-max-neighbors",
+        type=int,
+        default=DEFAULT_HNSW_MAX_NEIGHBORS,
+        help="HNSW max_neighbors parameter (higher = denser graph, better recall)",
     )
     parser.add_argument(
         "--max-files", type=int, default=None, help="Limit number of files to ingest"
@@ -507,12 +596,12 @@ Examples:
     parser.add_argument(
         "--embedding-model",
         default=None,
-        help="Embedding model id/path (default: BAAI/bge-base-en-v1.5; also supports intfloat/e5-large-v2)",
+        help=f"Embedding model id/path (default: {DEFAULT_EMBED_MODEL}; also supports intfloat/e5-large-v2)",
     )
     # LLAMA-specific flags removed in this build (local-sbert only)
     parser.add_argument(
         "--collection-name",
-        default="10k_documents",
+        default=DEFAULT_COLLECTION_NAME,
         help="Chroma collection name",
     )
     parser.add_argument(
@@ -531,6 +620,9 @@ Examples:
     if not args.metadata_only:
         logger.info(f"Chunk Size: {args.chunk_size}")
         logger.info(f"Chunk Overlap: {args.chunk_overlap}")
+        logger.info(f"HNSW ef_construction: {args.hnsw_ef_construction}")
+        logger.info(f"HNSW ef_search: {args.hnsw_ef_search}")
+        logger.info(f"HNSW max_neighbors: {args.hnsw_max_neighbors}")
         logger.info("Embedding: HuggingFace local model")
 
     # Auto-detect input directory if default doesn't exist or is empty
@@ -584,6 +676,9 @@ Examples:
             embedding_model_name=args.embedding_model or "BAAI/bge-base-en-v1.5",
             collection_name=args.collection_name,
             resolve_names=args.resolve_company_names,
+            hnsw_ef_construction=args.hnsw_ef_construction,
+            hnsw_ef_search=args.hnsw_ef_search,
+            hnsw_max_neighbors=args.hnsw_max_neighbors,
             max_files=args.max_files,
         )
         if not metadata_docs:

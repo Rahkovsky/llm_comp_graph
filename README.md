@@ -68,27 +68,45 @@ python scripts/generate_questions.py --input ./sec_data --output ./questions
 # Activate virtual environment
 source .venv/bin/activate
 
-# 1) Build the index (defaults to data/input/10K, uses local HuggingFace embeddings)
+# 1) Build the index with optimized settings for 10-K documents
 python scripts/create_llama_index.py \
   --input-dir data/input/10K \
-  --output-dir llama_index \
-  --embedding-model BAAI/bge-base-en-v1.5
+  --output-dir data/llama_index \
+  --embedding-model BAAI/bge-base-en-v1.5 \
+  --chunk-size 900 \
+  --chunk-overlap 160
 
-# Options:
-#   --metadata-only            # create only metadata_index.json (no vector index)
-#   --max-files 500            # index a subset for quick tests
-#   --rebuild                  # wipe existing chroma_db and index dirs first
-#   --collection-name NAME     # change Chroma collection name (default: 10k_documents)
-#   --resolve-company-names    # enrich metadata with company_name via SEC (slower)
+# HNSW tuning for optimal recall/performance balance:
+#   --hnsw-ef-construction 200    # Higher = better recall, slower build
+#   --hnsw-ef-search 150          # Higher = better recall, slower queries
+#   --hnsw-max-neighbors 32       # Higher = denser graph, better recall
 
-# 2) Query the index and optionally summarize results (all local)
+# Other options:
+#   --metadata-only               # create only metadata_index.json (no vector index)
+#   --max-files 500               # index a subset for quick tests
+#   --rebuild                     # wipe existing chroma_db and index dirs first
+#   --collection-name NAME        # change Chroma collection name (default: 10k_documents)
+#   --resolve-company-names       # enrich metadata with company_name via SEC (slower)
+
+# 2) Query the index with advanced search options
 python scripts/search_llama_index.py \
-  --index-dir llama_index \
+  --index-dir data/llama_index \
   --query "revenue recognition policy" \
   --top-k 8 \
   --summarize --summary-sentences 7
 
-# Embedding model options:
+# Advanced search options:
+#   --llm-summary                 # Use local LLAMA for executive summary
+#   --llm-n-ctx 16384            # Context window for LLAMA (tokens)
+#   --rewrite-queries             # Use local LLM to rewrite queries for better recall
+#   --n-rewritten-queries 3      # Number of rewritten queries to generate
+#   --query-rewrite-temp 0.3     # Temperature for query rewriting
+#   --filter-ticker AAPL MSFT    # Filter by specific tickers
+#   --filter-year 2024 2023      # Filter by filing years
+#   --mmr                         # Enable MMR diversity selection (default: on)
+#   --reranker-model cross-encoder/ms-marco-MiniLM-L-6-v2  # Optional reranking
+
+# Embedding model options (must match index creation):
 #   --embedding-model BAAI/bge-base-en-v1.5   # default; use same at query time
 #                         intfloat/e5-large-v2
 #                         BAAI/bge-m3         # 1024 ctx; chunking auto-caps to model max
@@ -116,8 +134,8 @@ llm_comp_graph/
 
 - [x] **Local LLAMA Setup** - Complete
 - [x] **10-K Downloader** - Available
-- [ ] **Vector Database Creation** - In Progress
-- [ ] **RAG System for Business Questions** - Planned
+- [x] **Vector Database Creation** - Complete with HNSW tuning
+- [x] **RAG System for Business Questions** - Available with advanced search
 - [ ] **LLM Fine-tuning on 10-K Data** - Planned
 
 ## Documentation

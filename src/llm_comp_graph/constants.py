@@ -55,3 +55,9 @@ def _find_project_root() -> str:
 PROJECT_ROOT = _find_project_root()
 LLAMA_CLI = os.path.join(PROJECT_ROOT, LLAMA_CLI_REL)
 LLAMA_MODEL = os.path.join(PROJECT_ROOT, LLAMA_MODEL_REL)
+
+# Indexing/Search defaults
+INDEX_DIR = "data/llama_index"
+DEFAULT_EMBED_MODEL = "BAAI/bge-base-en-v1.5"
+DEFAULT_COLLECTION_NAME = "10k_documents"
+DEFAULT_LLM_CTX = 16384  # maximum size of the prompt + generation
